@@ -28,7 +28,7 @@ func NewAlumniService(r repository.AlumniRepository) *AlumniService {
 // }
 
 func (h *AlumniService) GetByID(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+	id := mux.Vars(r)["id"]
 	alumni, err := h.repo.FindByID(id)
 	if err != nil {
 		http.Error(w, "Alumni not found", http.StatusNotFound)
@@ -51,7 +51,7 @@ func (h *AlumniService) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AlumniService) Update(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+	id := mux.Vars(r)["id"]
 	var a models.Alumni
 	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
 		http.Error(w, "Invalid input", http.StatusBadRequest)
@@ -65,7 +65,7 @@ func (h *AlumniService) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AlumniService) Delete(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+	id := mux.Vars(r)["id"]
 	if err := h.repo.Delete(id); err != nil {
 		http.Error(w, "Failed to delete alumni", http.StatusInternalServerError)
 		return

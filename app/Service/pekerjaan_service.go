@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 
-	// "github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 )
 
@@ -20,9 +19,7 @@ func NewPekerjaanService(r repository.PekerjaanRepository) *PekerjaanService {
 }
 
 func (h *PekerjaanService) GetByAlumni(w http.ResponseWriter, r *http.Request) {
-	// vars := mux.Vars(r)
-    // alumniID := vars["alumni_id"]
-	alumniID, _ := strconv.Atoi(mux.Vars(r)["alumni_id"])
+	alumniID := mux.Vars(r)["alumni_id"]
 	data, err := h.repo.FindByAlumni(alumniID)
 	if err != nil {
 		http.Error(w, "Not found", http.StatusNotFound)
@@ -45,24 +42,20 @@ func (h *PekerjaanService) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PekerjaanService) GetByID(w http.ResponseWriter, r *http.Request) {
-    id, err := strconv.Atoi(mux.Vars(r)["id"])
-    if err != nil {
-        http.Error(w, "Invalid ID", http.StatusBadRequest)
-        return
-    }
+	id := mux.Vars(r)["id"]
 
-    pekerjaan, err := h.repo.FindByPekerjaanID(id)
-    if err != nil {
-        http.Error(w, "Data not found", http.StatusNotFound)
-        return
-    }
+	pekerjaan, err := h.repo.FindByPekerjaanID(id)
+	if err != nil {
+		http.Error(w, "Data not found", http.StatusNotFound)
+		return
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(pekerjaan)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(pekerjaan)
 }
 
 func (h *PekerjaanService) Update(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+	id := mux.Vars(r)["id"]
 	var p models.Pekerjaan
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		http.Error(w, "Invalid input", http.StatusBadRequest)
@@ -120,7 +113,7 @@ func (h *PekerjaanService) GetPekerjaan(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-		resp := map[string]interface{}{
+	resp := map[string]interface{}{
 		"data": data,
 		"meta": map[string]interface{}{
 			"page":   page,
@@ -139,38 +132,35 @@ func (h *PekerjaanService) GetPekerjaan(w http.ResponseWriter, r *http.Request) 
 
 
 func (s *PekerjaanService) SoftDeletePekerjaan(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    pekerjaanID, _ := strconv.Atoi(vars["id"])
+	vars := mux.Vars(r)
+	pekerjaanID := vars["id"]
 
-    // Ambil user dari context (dimasukkan di middleware)
-    userVal := r.Context().Value("user")
-    if userVal == nil {
-        http.Error(w, "Unauthorized: user not found in context", http.StatusUnauthorized)
-        return
-    }
+	userVal := r.Context().Value("user")
+	if userVal == nil {
+		http.Error(w, "Unauthorized: user not found in context", http.StatusUnauthorized)
+		return
+	}
 
-    user := userVal.(models.User)
+	user := userVal.(models.User)
 
-    if user.Role == "admin" {
-        // Admin hapus semua pekerjaan berdasarkan alumni_id (query param)
-        alumniIDStr := r.URL.Query().Get("alumni_id")
-        alumniID, _ := strconv.Atoi(alumniIDStr)
+	if user.Role == "admin" {
+		alumniID := r.URL.Query().Get("alumni_id")
 
-        if err := s.repo.SoftDeleteByAdmin(alumniID); err != nil {
-            http.Error(w, "Failed to soft delete pekerjaan (admin)", http.StatusInternalServerError)
-            return
-        }
-        json.NewEncoder(w).Encode(map[string]string{"message": "Semua riwayat pekerjaan alumni berhasil dihapus"})
-        return
-    }
+		if err := s.repo.SoftDeleteByAdmin(alumniID); err != nil {
+			http.Error(w, "Failed to soft delete pekerjaan (admin)", http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"message": "Semua riwayat pekerjaan alumni berhasil dihapus"})
+		return
+	}
 
-    // User biasa hanya boleh hapus pekerjaannya sendiri
-    if err := s.repo.SoftDeleteByUser(pekerjaanID, user.ID); err != nil {
-        http.Error(w, "Failed to soft delete pekerjaan (user)", http.StatusInternalServerError)
-        return
-    }
+	userIDStr := user.ID.Hex()
+	if err := s.repo.SoftDeleteByUser(pekerjaanID, userIDStr); err != nil {
+		http.Error(w, "Failed to soft delete pekerjaan (user)", http.StatusInternalServerError)
+		return
+	}
 
-    json.NewEncoder(w).Encode(map[string]string{"message": "Pekerjaan berhasil dihapus"})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Pekerjaan berhasil dihapus"})
 }
 
 // GetTrash - Get semua data yang sudah di-soft delete
@@ -220,9 +210,8 @@ func (h *PekerjaanService) GetTrash(w http.ResponseWriter, r *http.Request) {
 // RestorePekerjaan - Restore data dari trash
 func (h *PekerjaanService) RestorePekerjaan(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	pekerjaanID, _ := strconv.Atoi(vars["id"])
+	pekerjaanID := vars["id"]
 
-	// Ambil user dari context
 	userVal := r.Context().Value("user")
 	if userVal == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -233,18 +222,15 @@ func (h *PekerjaanService) RestorePekerjaan(w http.ResponseWriter, r *http.Reque
 	var err error
 
 	if user.Role == "admin" {
-		// Admin bisa restore semua data atau data alumni tertentu
 		alumniIDStr := r.URL.Query().Get("alumni_id")
 		if alumniIDStr != "" {
-			alumniID, _ := strconv.Atoi(alumniIDStr)
-			err = h.repo.RestoreByAdmin(alumniID)
+			err = h.repo.RestoreByAdmin(alumniIDStr)
 		} else {
-			// Restore data tertentu
-			err = h.repo.Restore(pekerjaanID, 0) // 0 berarti tidak check alumni_id
+			err = h.repo.Restore(pekerjaanID, "")
 		}
 	} else {
-		// User hanya bisa restore data milik sendiri
-		err = h.repo.Restore(pekerjaanID, user.ID)
+		userIDStr := user.ID.Hex()
+		err = h.repo.Restore(pekerjaanID, userIDStr)
 	}
 
 	if err != nil {
@@ -258,9 +244,8 @@ func (h *PekerjaanService) RestorePekerjaan(w http.ResponseWriter, r *http.Reque
 // HardDeletePekerjaan - Hapus permanen data dari trash
 func (h *PekerjaanService) HardDeletePekerjaan(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	pekerjaanID, _ := strconv.Atoi(vars["id"])
+	pekerjaanID := vars["id"]
 
-	// Ambil user dari context
 	userVal := r.Context().Value("user")
 	if userVal == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -271,18 +256,15 @@ func (h *PekerjaanService) HardDeletePekerjaan(w http.ResponseWriter, r *http.Re
 	var err error
 
 	if user.Role == "admin" {
-		// Admin bisa hard delete semua data atau data alumni tertentu
 		alumniIDStr := r.URL.Query().Get("alumni_id")
 		if alumniIDStr != "" {
-			alumniID, _ := strconv.Atoi(alumniIDStr)
-			err = h.repo.HardDeleteByAdmin(alumniID)
+			err = h.repo.HardDeleteByAdmin(alumniIDStr)
 		} else {
-			// Hard delete data tertentu
-			err = h.repo.HardDelete(pekerjaanID, 0) // 0 berarti tidak check alumni_id
+			err = h.repo.HardDelete(pekerjaanID, "")
 		}
 	} else {
-		// User hanya bisa hard delete data milik sendiri
-		err = h.repo.HardDelete(pekerjaanID, user.ID)
+		userIDStr := user.ID.Hex()
+		err = h.repo.HardDelete(pekerjaanID, userIDStr)
 	}
 
 	if err != nil {

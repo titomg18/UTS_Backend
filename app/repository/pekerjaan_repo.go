@@ -1,82 +1,142 @@
 package repository
 
 import (
+	"context"
 	"crud-app/app/models"
-	"database/sql"
 	"fmt"
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type PekerjaanRepository interface {
-	FindByAlumni(alumniID int) ([]models.Pekerjaan, error)
+	FindByAlumni(alumniID string) ([]models.Pekerjaan, error)
 	Create(p *models.Pekerjaan) error
-	Update(id int, p *models.Pekerjaan) error
-	Delete(id int) error
+	Update(id string, p *models.Pekerjaan) error
+	Delete(id string) error
 	GetPekerjaan(search, sortBy, order string, page, limit int) ([]models.Pekerjaan, int, error)
-	SoftDeleteByAdmin(alumni_ID int) error
-	SoftDeleteByUser(Id int, alumni_id int) error
-	FindByPekerjaanID(id int) (*models.Pekerjaan, error)
-	
-	// New methods for trash management
+	SoftDeleteByAdmin(alumni_ID string) error
+	SoftDeleteByUser(Id string, alumni_id string) error
+	FindByPekerjaanID(id string) (*models.Pekerjaan, error)
 	GetTrash(search, sortBy, order string, page, limit int) ([]models.Pekerjaan, int, error)
-	Restore(pekerjaanID, alumniID int) error
-	RestoreByAdmin(alumniID int) error
-	HardDelete(pekerjaanID, alumniID int) error
-	HardDeleteByAdmin(alumniID int) error
+	Restore(pekerjaanID, alumniID string) error
+	RestoreByAdmin(alumniID string) error
+	HardDelete(pekerjaanID, alumniID string) error
+	HardDeleteByAdmin(alumniID string) error
 }
 
-type pekerjaanPostgres struct{ db *sql.DB }
-
-func NewPekerjaanRepository(db *sql.DB) PekerjaanRepository {
-	return &pekerjaanPostgres{db}
+type pekerjaanMongo struct {
+	collection *mongo.Collection
 }
 
-func (r *pekerjaanPostgres) FindByAlumni(alumniID int) ([]models.Pekerjaan, error) {
-	rows, err := r.db.Query("SELECT id, alumni_id, nama_perusahaan, posisi_jabatan FROM pekerjaan_alumni WHERE alumni_id=$1 AND is_delete IS NULL", alumniID)
+func NewPekerjaanRepository(db *mongo.Database) PekerjaanRepository {
+	return &pekerjaanMongo{
+		collection: db.Collection("pekerjaan_alumni"),
+	}
+}
+
+func (r *pekerjaanMongo) FindByAlumni(alumniID string) ([]models.Pekerjaan, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	objID, err := primitive.ObjectIDFromHex(alumniID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	filter := bson.M{
+		"alumni_id":  objID,
+		"is_deleted": nil,
+	}
+
+	cursor, err := r.collection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
 
 	var list []models.Pekerjaan
-	for rows.Next() {
-		var p models.Pekerjaan
-		rows.Scan(&p.ID, &p.Alumni_ID, &p.Nama_Perusahaan, &p.Posisi_jabatan)
-		list = append(list, p)
+	if err = cursor.All(ctx, &list); err != nil {
+		return nil, err
 	}
+
 	return list, nil
 }
 
-func (r *pekerjaanPostgres) FindByPekerjaanID(id int) (*models.Pekerjaan, error) {
+func (r *pekerjaanMongo) FindByPekerjaanID(id string) (*models.Pekerjaan, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return nil, err
+	}
+
 	var p models.Pekerjaan
-	err := r.db.QueryRow("SELECT id, nama_perusahaan, posisi_jabatan FROM pekerjaan_alumni WHERE id=$1", id).
-		Scan(&p.ID, &p.Nama_Perusahaan, &p.Posisi_jabatan)
+	err = r.collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&p)
 	if err != nil {
 		return nil, err
 	}
 	return &p, nil
 }
 
-func (r *pekerjaanPostgres) Create(p *models.Pekerjaan) error {
-	_, err := r.db.Exec(
-		"INSERT INTO pekerjaan_alumni(alumni_id,nama_perusahaan, posisi_jabatan, bidang_industri, lokasi_kerja, gaji_range, tanggal_mulai_kerja, tanggal_selesai_kerja, status_pekerjaan, created_at, updated_at) VALUES($1,$2,$3, $4, $5, $6, $7, $8, $9, $10, $11)",
-		p.Alumni_ID, p.Nama_Perusahaan, p.Posisi_jabatan, p.Bidang_industri, p.Lokasi_kerja, p.Gaji_range, p.Tanggal_kerja, p.Tanggal_selesai, p.Status, p.CreatedAt, p.UpdatedAt,
-	)
+func (r *pekerjaanMongo) Create(p *models.Pekerjaan) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	p.ID = primitive.NewObjectID()
+	p.CreatedAt = time.Now()
+	p.UpdatedAt = time.Now()
+
+	_, err := r.collection.InsertOne(ctx, p)
 	return err
 }
 
-func (r *pekerjaanPostgres) Update(id int, p *models.Pekerjaan) error {
-	_, err := r.db.Exec("UPDATE pekerjaan_alumni SET nama_perusahaan=$1, posisi_jabatan=$2 , gaji_range=$3 WHERE id=$4", p.Nama_Perusahaan, p.Posisi_jabatan, p.Gaji_range, id)
+func (r *pekerjaanMongo) Update(id string, p *models.Pekerjaan) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return err
+	}
+
+	p.UpdatedAt = time.Now()
+
+	update := bson.M{
+		"$set": bson.M{
+			"nama_perusahaan": p.Nama_Perusahaan,
+			"posisi_jabatan":  p.Posisi_jabatan,
+			"gaji_range":      p.Gaji_range,
+			"updated_at":      p.UpdatedAt,
+		},
+	}
+
+	_, err = r.collection.UpdateOne(ctx, bson.M{"_id": objID}, update)
 	return err
 }
 
-func (r *pekerjaanPostgres) Delete(id int) error {
-	_, err := r.db.Exec("DELETE FROM pekerjaan_alumni WHERE id=$1", id)
+func (r *pekerjaanMongo) Delete(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return err
+	}
+
+	_, err = r.collection.DeleteOne(ctx, bson.M{"_id": objID})
 	return err
 }
 
-func (r *pekerjaanPostgres) GetPekerjaan(search, sortBy, order string, page, limit int) ([]models.Pekerjaan, int, error) {
-	var Pekerjaan []models.Pekerjaan
-	var total int
+func (r *pekerjaanMongo) GetPekerjaan(search, sortBy, order string, page, limit int) ([]models.Pekerjaan, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var pekerjaan []models.Pekerjaan
 
 	if page < 1 {
 		page = 1
@@ -84,108 +144,120 @@ func (r *pekerjaanPostgres) GetPekerjaan(search, sortBy, order string, page, lim
 	if limit < 1 {
 		limit = 10
 	}
-	offset := (page - 1) * limit
+
+	skip := int64((page - 1) * limit)
 
 	allowedSort := map[string]bool{
-		"id": true, "alumni_id": true, "nama_perusahaan": true,
+		"_id": true, "alumni_id": true, "nama_perusahaan": true,
 		"posisi_jabatan": true, "bidang_industri": true,
 		"lokasi_kerja": true, "gaji_range": true,
 	}
 	if !allowedSort[sortBy] {
-		sortBy = "id"
+		sortBy = "_id"
 	}
 	if order != "asc" && order != "desc" {
 		order = "asc"
 	}
 
-	base := "FROM pekerjaan_alumni WHERE 1=1"
-	args := []interface{}{}
-	idx := 1
-
+	// Build filter
+	filter := bson.M{"is_deleted": nil}
 	if search != "" {
-		base += fmt.Sprintf(` AND (
-			CAST(alumni_id AS TEXT) ILIKE $%d OR
-			nama_perusahaan ILIKE $%d OR 
-			posisi_jabatan ILIKE $%d OR 
-			bidang_industri ILIKE $%d OR 
-			lokasi_kerja ILIKE $%d OR 
-			gaji_range ILIKE $%d
-		)`, idx, idx+1, idx+2, idx+3, idx+4, idx+5)
-
-		args = append(args,
-			"%"+search+"%",
-			"%"+search+"%",
-			"%"+search+"%",
-			"%"+search+"%",
-			"%"+search+"%",
-			"%"+search+"%",
-		)
-		idx += 6
+		filter = bson.M{
+			"$and": []bson.M{
+				{"is_deleted": nil},
+				{
+					"$or": []bson.M{
+						{"alumni_id": bson.M{"$regex": search, "$options": "i"}},
+						{"nama_perusahaan": bson.M{"$regex": search, "$options": "i"}},
+						{"posisi_jabatan": bson.M{"$regex": search, "$options": "i"}},
+						{"bidang_industri": bson.M{"$regex": search, "$options": "i"}},
+						{"lokasi_kerja": bson.M{"$regex": search, "$options": "i"}},
+						{"gaji_range": bson.M{"$regex": search, "$options": "i"}},
+					},
+				},
+			},
+		}
 	}
 
-	// hitung total data
-	countQuery := "SELECT COUNT(*) " + base
-	if err := r.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
-	// ambil data dengan pagination & sorting
-	dataQuery := fmt.Sprintf(`
-		SELECT id, alumni_id, nama_perusahaan, posisi_jabatan, bidang_industri, lokasi_kerja, gaji_range 
-		%s ORDER BY %s %s LIMIT $%d OFFSET $%d`,
-		base, sortBy, order, idx, idx+1)
-
-	args = append(args, limit, offset)
-
-	rows, err := r.db.Query(dataQuery, args...)
+	// Count total
+	total, err := r.collection.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var p models.Pekerjaan
-		if err := rows.Scan(
-			&p.ID,
-			&p.Alumni_ID,
-			&p.Nama_Perusahaan,
-			&p.Posisi_jabatan,
-			&p.Bidang_industri,
-			&p.Lokasi_kerja,
-			&p.Gaji_range,
-		); err != nil {
-			return nil, 0, err
-		}
-		Pekerjaan = append(Pekerjaan, p)
+	// Sort order
+	sortOrder := int32(1)
+	if order == "desc" {
+		sortOrder = -1
 	}
 
-	return Pekerjaan, total, nil
+	// Query with pagination and sorting
+	opts := options.Find().
+		SetSkip(skip).
+		SetLimit(int64(limit)).
+		SetSort(bson.M{sortBy: sortOrder})
+
+	cursor, err := r.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	if err = cursor.All(ctx, &pekerjaan); err != nil {
+		return nil, 0, err
+	}
+
+	return pekerjaan, int(total), nil
 }
 
-// Soft delete by Admin
-func (r *pekerjaanPostgres) SoftDeleteByAdmin(alumniID int) error {
-	_, err := r.db.Exec(`
-		UPDATE pekerjaan_alumni 
-		SET is_delete = NOW() 
-		WHERE alumni_id = $1 AND is_delete IS NULL
-	`, alumniID)
+func (r *pekerjaanMongo) SoftDeleteByAdmin(alumniID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	objID, err := primitive.ObjectIDFromHex(alumniID)
+	if err != nil {
+		return err
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"is_deleted": time.Now(),
+		},
+	}
+
+	_, err = r.collection.UpdateMany(ctx, bson.M{"alumni_id": objID, "is_deleted": nil}, update)
 	return err
 }
 
-// Soft delete by User
-func (r *pekerjaanPostgres) SoftDeleteByUser(pekerjaanID, userID int) error {
-	_, err := r.db.Exec(`
-		UPDATE pekerjaan_alumni 
-		SET is_delete = NOW() 
-		WHERE id = $1 AND alumni_id = $2 AND is_delete IS NULL
-	`, pekerjaanID, userID)
+func (r *pekerjaanMongo) SoftDeleteByUser(pekerjaanID, alumniID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pekerjaanObjID, err := primitive.ObjectIDFromHex(pekerjaanID)
+	if err != nil {
+		return err
+	}
+
+	alumniObjID, err := primitive.ObjectIDFromHex(alumniID)
+	if err != nil {
+		return err
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"is_deleted": time.Now(),
+		},
+	}
+
+	_, err = r.collection.UpdateOne(ctx, bson.M{"_id": pekerjaanObjID, "alumni_id": alumniObjID, "is_deleted": nil}, update)
 	return err
 }
 
-// Method untuk trash management
-func (r *pekerjaanPostgres) GetTrash(search, sortBy, order string, page, limit int) ([]models.Pekerjaan, int, error) {
+func (r *pekerjaanMongo) GetTrash(search, sortBy, order string, page, limit int) ([]models.Pekerjaan, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	var pekerjaan []models.Pekerjaan
-	var total int
 
 	if page < 1 {
 		page = 1
@@ -193,11 +265,11 @@ func (r *pekerjaanPostgres) GetTrash(search, sortBy, order string, page, limit i
 	if limit < 1 {
 		limit = 10
 	}
-	offset := (page - 1) * limit
 
-	// Validasi sorting
+	skip := int64((page - 1) * limit)
+
 	allowedSort := map[string]bool{
-		"id": true, "alumni_id": true, "nama_perusahaan": true,
+		"_id": true, "alumni_id": true, "nama_perusahaan": true,
 		"posisi_jabatan": true, "is_deleted": true,
 	}
 	if !allowedSort[sortBy] {
@@ -207,139 +279,162 @@ func (r *pekerjaanPostgres) GetTrash(search, sortBy, order string, page, limit i
 		order = "desc"
 	}
 
-	// Base query untuk data yang sudah di-soft delete
-	base := "FROM pekerjaan_alumni WHERE is_delete IS NOT NULL"
-	args := []interface{}{}
-	idx := 1
-
+	// Build filter for deleted items
+	filter := bson.M{"is_deleted": bson.M{"$ne": nil}}
 	if search != "" {
-		base += fmt.Sprintf(` AND (
-			CAST(alumni_id AS TEXT) ILIKE $%d OR
-			nama_perusahaan ILIKE $%d OR 
-			posisi_jabatan ILIKE $%d
-		)`, idx, idx+1, idx+2)
-
-		args = append(args,
-			"%"+search+"%",
-			"%"+search+"%",
-			"%"+search+"%",
-		)
-		idx += 3
+		filter = bson.M{
+			"$and": []bson.M{
+				{"is_deleted": bson.M{"$ne": nil}},
+				{
+					"$or": []bson.M{
+						{"alumni_id": bson.M{"$regex": search, "$options": "i"}},
+						{"nama_perusahaan": bson.M{"$regex": search, "$options": "i"}},
+						{"posisi_jabatan": bson.M{"$regex": search, "$options": "i"}},
+					},
+				},
+			},
+		}
 	}
 
-	// Hitung total data trash
-	countQuery := "SELECT COUNT(*) " + base
-	if err := r.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
-	// Ambil data trash dengan pagination
-	dataQuery := fmt.Sprintf(`
-		SELECT id, alumni_id, nama_perusahaan, posisi_jabatan, bidang_industri, 
-		       lokasi_kerja, gaji_range, is_delete
-		%s ORDER BY %s %s LIMIT $%d OFFSET $%d`,
-		base, sortBy, order, idx, idx+1)
-
-	args = append(args, limit, offset)
-
-	rows, err := r.db.Query(dataQuery, args...)
+	// Count total
+	total, err := r.collection.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var p models.Pekerjaan
-		if err := rows.Scan(
-			&p.ID,
-			&p.Alumni_ID,
-			&p.Nama_Perusahaan,
-			&p.Posisi_jabatan,
-			&p.Bidang_industri,
-			&p.Lokasi_kerja,
-			&p.Gaji_range,
-			&p.IsDelete,
-		); err != nil {
-			return nil, 0, err
-		}
-		pekerjaan = append(pekerjaan, p)
+	// Sort order
+	sortOrder := int32(1)
+	if order == "desc" {
+		sortOrder = -1
 	}
 
-	return pekerjaan, total, nil
+	// Query with pagination and sorting
+	opts := options.Find().
+		SetSkip(skip).
+		SetLimit(int64(limit)).
+		SetSort(bson.M{sortBy: sortOrder})
+
+	cursor, err := r.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	if err = cursor.All(ctx, &pekerjaan); err != nil {
+		return nil, 0, err
+	}
+
+	return pekerjaan, int(total), nil
 }
 
-// Restore soft deleted data
-func (r *pekerjaanPostgres) Restore(pekerjaanID, alumniID int) error {
-	query := `
-		UPDATE pekerjaan_alumni 
-		SET is_delete = NULL 
-		WHERE id = $1 AND alumni_id = $2 AND is_delete IS NOT NULL
-	`
-	result, err := r.db.Exec(query, pekerjaanID, alumniID)
+func (r *pekerjaanMongo) Restore(pekerjaanID, alumniID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pekerjaanObjID, err := primitive.ObjectIDFromHex(pekerjaanID)
 	if err != nil {
 		return err
 	}
 
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
+	filter := bson.M{"_id": pekerjaanObjID, "is_deleted": bson.M{"$ne": nil}}
+	if alumniID != "" {
+		alumniObjID, err := primitive.ObjectIDFromHex(alumniID)
+		if err != nil {
+			return err
+		}
+		filter["alumni_id"] = alumniObjID
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"is_deleted": nil,
+		},
+	}
+
+	result, err := r.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+
+	if result.MatchedCount == 0 {
 		return fmt.Errorf("data not found or already restored")
 	}
 
 	return nil
 }
 
-// Restore all by admin
-func (r *pekerjaanPostgres) RestoreByAdmin(alumniID int) error {
-	query := `
-		UPDATE pekerjaan_alumni 
-		SET is_delete = NULL 
-		WHERE alumni_id = $1 AND is_delete IS NOT NULL
-	`
-	result, err := r.db.Exec(query, alumniID)
+func (r *pekerjaanMongo) RestoreByAdmin(alumniID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	objID, err := primitive.ObjectIDFromHex(alumniID)
 	if err != nil {
 		return err
 	}
 
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
+	update := bson.M{
+		"$set": bson.M{
+			"is_deleted": nil,
+		},
+	}
+
+	result, err := r.collection.UpdateMany(ctx, bson.M{"alumni_id": objID, "is_deleted": bson.M{"$ne": nil}}, update)
+	if err != nil {
+		return err
+	}
+
+	if result.MatchedCount == 0 {
 		return fmt.Errorf("no data found to restore")
 	}
 
 	return nil
 }
 
-// Hard delete (permanen hapus)
-func (r *pekerjaanPostgres) HardDelete(pekerjaanID, alumniID int) error {
-	query := `
-		DELETE FROM pekerjaan_alumni 
-		WHERE id = $1 AND alumni_id = $2 AND is_delete IS NOT NULL
-	`
-	result, err := r.db.Exec(query, pekerjaanID, alumniID)
+func (r *pekerjaanMongo) HardDelete(pekerjaanID, alumniID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pekerjaanObjID, err := primitive.ObjectIDFromHex(pekerjaanID)
 	if err != nil {
 		return err
 	}
 
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
+	filter := bson.M{"_id": pekerjaanObjID, "is_deleted": bson.M{"$ne": nil}}
+	if alumniID != "" {
+		alumniObjID, err := primitive.ObjectIDFromHex(alumniID)
+		if err != nil {
+			return err
+		}
+		filter["alumni_id"] = alumniObjID
+	}
+
+	result, err := r.collection.DeleteOne(ctx, filter)
+	if err != nil {
+		return err
+	}
+
+	if result.DeletedCount == 0 {
 		return fmt.Errorf("data not found or not in trash")
 	}
 
 	return nil
 }
 
-// Hard delete all by admin
-func (r *pekerjaanPostgres) HardDeleteByAdmin(alumniID int) error {
-	query := `
-		DELETE FROM pekerjaan_alumni 
-		WHERE alumni_id = $1 AND is_delete IS NOT NULL
-	`
-	result, err := r.db.Exec(query, alumniID)
+func (r *pekerjaanMongo) HardDeleteByAdmin(alumniID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	objID, err := primitive.ObjectIDFromHex(alumniID)
 	if err != nil {
 		return err
 	}
 
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
+	result, err := r.collection.DeleteMany(ctx, bson.M{"alumni_id": objID, "is_deleted": bson.M{"$ne": nil}})
+	if err != nil {
+		return err
+	}
+
+	if result.DeletedCount == 0 {
 		return fmt.Errorf("no data found in trash")
 	}
 

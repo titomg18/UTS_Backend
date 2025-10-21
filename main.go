@@ -13,7 +13,8 @@ import (
 )
 
 func main() {
-	db := database.ConnectDB()
+	mongoClient := database.ConnectDB()
+	db := database.GetDatabase(mongoClient)
 
 	// repositories
 	userRepo := repository.NewUserRepository(db)

@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	// "crud-app/app/models"
 	"crud-app/app/repository"
 	"net/http"
 	"os"
@@ -29,7 +28,7 @@ func AuthMiddleware(userRepo repository.UserRepository, next http.Handler) http.
 		}
 
 		claims := parsed.Claims.(jwt.MapClaims)
-		id := int(claims["sub"].(float64))
+		id := claims["sub"].(string)
 
 		user, err := userRepo.GetByID(id)
 		if err != nil {
@@ -41,4 +40,3 @@ func AuthMiddleware(userRepo repository.UserRepository, next http.Handler) http.
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
-

@@ -9,7 +9,6 @@ import (
 	"crud-app/app/repository"
 
 	"github.com/gorilla/mux"
-	// "github.com/gorilla/mux"
 )
 
 type UserService struct {
@@ -69,12 +68,12 @@ func (h *UserService) GetUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserService) SoftDeleteUser(w http.ResponseWriter, r *http.Request) {
-    id, _ := strconv.Atoi(mux.Vars(r)["id"])
+	id := mux.Vars(r)["id"]
 
-    if err := h.Repo.SoftDelete(id); err != nil {
-        http.Error(w, "Failed to soft delete user", http.StatusInternalServerError)
-        return
-    }
+	if err := h.Repo.SoftDelete(id); err != nil {
+		http.Error(w, "Failed to soft delete user", http.StatusInternalServerError)
+		return
+	}
 
-    json.NewEncoder(w).Encode(map[string]string{"message": "User soft deleted"})
+	json.NewEncoder(w).Encode(map[string]string{"message": "User soft deleted"})
 }

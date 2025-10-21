@@ -1,55 +1,79 @@
 package repository
 
 import (
+	"context"
 	"crud-app/app/models"
-	"database/sql"
 	"fmt"
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type UserRepository interface {
 	GetByUsername(username string) (*models.User, error)
-	GetByID(id int) (*models.User, error)
+	GetByID(id string) (*models.User, error)
 	Create(user *models.User) error
 	GetUser(search, sortBy, order string, page, limit int) ([]models.User, int, error)
-	SoftDelete(id int) error
+	SoftDelete(id string) error
 }
 
-type userRepository struct{ DB *sql.DB }
-
-func NewUserRepository(db *sql.DB) UserRepository {
-	return &userRepository{DB: db}
+type userMongo struct {
+	collection *mongo.Collection
 }
 
-func (r *userRepository) GetByUsername(username string) (*models.User, error) {
+func NewUserRepository(db *mongo.Database) UserRepository {
+	return &userMongo{
+		collection: db.Collection("users"),
+	}
+}
+
+func (r *userMongo) GetByUsername(username string) (*models.User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	var u models.User
-	err := r.DB.QueryRow("SELECT id, username, password_hash, role FROM users WHERE username=$1", username).
-		Scan(&u.ID, &u.Username, &u.Password, &u.Role)
+	err := r.collection.FindOne(ctx, bson.M{"username": username}).Decode(&u)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
 }
 
-func (r *userRepository) GetByID(id int) (*models.User, error) {
+func (r *userMongo) GetByID(id string) (*models.User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return nil, err
+	}
+
 	var u models.User
-	err := r.DB.QueryRow("SELECT id, username, role FROM users WHERE id=$1", id).
-		Scan(&u.ID, &u.Username, &u.Role)
+	err = r.collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&u)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
 }
 
+func (r *userMongo) Create(u *models.User) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-func (r *userRepository) Create(u *models.User) error {
-    query := `INSERT INTO users (email, username, password_hash, role) VALUES ($1, $2, $3, $4)`
-    _, err := r.DB.Exec(query, u.Email, u.Username, u.Password, u.Role)
-    return err
+	u.ID = primitive.NewObjectID()
+
+	_, err := r.collection.InsertOne(ctx, u)
+	return err
 }
 
-func (r *userRepository) GetUser(search, sortBy, order string, page, limit int) ([]models.User, int, error) {
+func (r *userMongo) GetUser(search, sortBy, order string, page, limit int) ([]models.User, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	var users []models.User
-	var total int
 
 	if page < 1 {
 		page = 1
@@ -57,74 +81,82 @@ func (r *userRepository) GetUser(search, sortBy, order string, page, limit int) 
 	if limit < 1 {
 		limit = 10
 	}
-	offset := (page - 1) * limit
 
-	// validasi sort
-	allowedSort := map[string]bool{"id": true, "username": true, "email": true}
+	skip := int64((page - 1) * limit)
+
+	allowedSort := map[string]bool{"_id": true, "username": true, "email": true}
 	if !allowedSort[sortBy] {
-		sortBy = "id"
+		sortBy = "_id"
 	}
 	if order != "asc" && order != "desc" {
 		order = "asc"
 	}
 
-	// base query
-	query := `SELECT id, username, email, password_hash FROM users WHERE 1=1`
-	args := []interface{}{}
-
+	// Build filter
+	filter := bson.M{}
 	if search != "" {
-		query += " AND (username ILIKE $1 OR email ILIKE $2)"
-		args = append(args, "%"+search+"%", "%"+search+"%")
-	}
-
-	// hitung total
-	countQuery := "SELECT COUNT(*) FROM (" + query + ") AS sub"
-	if len(args) > 0 {
-		if err := r.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
-			return nil, 0, err
-		}
-	} else {
-		if err := r.DB.QueryRow(countQuery).Scan(&total); err != nil {
-			return nil, 0, err
+		filter = bson.M{
+			"$or": []bson.M{
+				{"username": bson.M{"$regex": search, "$options": "i"}},
+				{"email": bson.M{"$regex": search, "$options": "i"}},
+			},
 		}
 	}
 
-	// tambahkan sorting dan limit/offset
-	query = fmt.Sprintf("%s ORDER BY %s %s LIMIT %d OFFSET %d", query, sortBy, order, limit, offset)
-
-	rows, err := r.DB.Query(query, args...)
+	// Count total
+	total, err := r.collection.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var u models.User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Password); err != nil {
-			return nil, 0, err
-		}
-		users = append(users, u)
+	// Sort order
+	sortOrder := int32(1)
+	if order == "desc" {
+		sortOrder = -1
 	}
 
-	return users, total, nil
+	// Query with pagination and sorting
+	opts := options.Find().
+		SetSkip(skip).
+		SetLimit(int64(limit)).
+		SetSort(bson.M{sortBy: sortOrder})
+
+	cursor, err := r.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	if err = cursor.All(ctx, &users); err != nil {
+		return nil, 0, err
+	}
+
+	return users, int(total), nil
 }
 
+func (r *userMongo) SoftDelete(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-func (r *userRepository) SoftDelete(id int) error {
-	query := `UPDATE users SET is_delete = NOW() WHERE id = $1`
-	 res, err := r.DB.Exec(query, id)
-	 
-	 if err != nil {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
 		return err
-	 }
+	}
 
-	 rows, _ := res.RowsAffected()
-	 if rows == 0 {
+	update := bson.M{
+		"$set": bson.M{
+			"is_delete": time.Now(),
+		},
+	}
+
+	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": objID}, update)
+	if err != nil {
+		return err
+	}
+
+	if result.MatchedCount == 0 {
 		return fmt.Errorf("user not found")
-	 }
+	}
 
-    return err
+	return nil
 }
-
-
-
